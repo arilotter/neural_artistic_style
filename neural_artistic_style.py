@@ -1,10 +1,16 @@
 #!/usr/bin/env python
 
+import sys
 import os
+import math
 import argparse
 import numpy as np
 import scipy.misc
+import scipy.ndimage as nd
 import deeppy as dp
+import PIL.Image
+import random
+import time
 
 from matconvnet import vgg_net
 from style_network import StyleNetwork
@@ -41,7 +47,8 @@ def imread(path):
 
 def imsave(path, img):
     img = np.clip(img, 0, 255).astype(np.uint8)
-    scipy.misc.imsave(path, img)
+    PIL.Image.fromarray(img).save(path, quality=97)
+    print "Wrote %s"%path
 
 
 def to_bc01(img):
@@ -75,6 +82,8 @@ def run():
                         help='Output animation directory.')
     parser.add_argument('--iterations', default=500, type=int,
                         help='Number of iterations to run.')
+    parser.add_argument('--scales', default=4, type=int,
+                        help='Number of scales to use.')
     parser.add_argument('--learn-rate', default=2.0, type=float,
                         help='Learning rate.')
     parser.add_argument('--smoothness', type=float, default=5e-8,
@@ -91,6 +100,9 @@ def run():
                         choices=['max', 'avg'], help='Subsampling scheme.')
     parser.add_argument('--network', default='imagenet-vgg-verydeep-19.mat',
                         type=str, help='Network in MatConvNet format).')
+    parser.add_argument('--outer_it', default=8000, type=int, help='Outer iterations.')
+    parser.add_argument('--inner_it', default=3, type=int, help='Inner iterations.')
+    parser.add_argument('--patch_size', default=512, type=int, help='Patchsize.')
     args = parser.parse_args()
 
     if args.random_seed is not None:
@@ -101,38 +113,70 @@ def run():
     # Inputs
     style_img = imread(args.style) - pixel_mean
     subject_img = imread(args.subject) - pixel_mean
-    if args.init is None:
-        init_img = subject_img
-    else:
-        init_img = imread(args.init) - pixel_mean
+    print "style_img", style_img.shape
+    print "subject_img", subject_img.shape
+    if args.init is None: init_img = subject_img
+    else: init_img = imread(args.init) - pixel_mean
     noise = np.random.normal(size=init_img.shape, scale=np.std(init_img)*1e-1)
     init_img = init_img * (1 - args.init_noise) + noise * args.init_noise
 
     # Setup network
     subject_weights = weight_array(args.subject_weights) * args.subject_ratio
     style_weights = weight_array(args.style_weights)
-    net = StyleNetwork(layers, to_bc01(init_img), to_bc01(subject_img),
-                       to_bc01(style_img), subject_weights, style_weights,
-                       args.smoothness)
+   
+    max_patch_size = np.array([args.patch_size, args.patch_size])
+    inner_iterations = 10
 
-    # Repaint image
-    def net_img():
-        return to_rgb(net.image) + pixel_mean
+    for outer_it in range(0,args.outer_it):
+      scale = 1.0
+      for sc in range(0, args.scales - 1): 
+        if random.random() < 0.25: scale*=2.0
+      print "OUTER_IT: ", outer_it, "SCALE:", scale
 
-    if not os.path.exists(args.animation):
-        os.mkdir(args.animation)
+      effective_patch_size = max_patch_size * scale
+      patch_size = (np.min([style_img.shape[0], subject_img.shape[0], init_img.shape[0], effective_patch_size[0]]),
+                    np.min([style_img.shape[1], subject_img.shape[1], init_img.shape[1], effective_patch_size[1]]))
 
-    params = net.params
-    learn_rule = dp.Adam(learn_rate=args.learn_rate)
-    learn_rule_states = [learn_rule.init_state(p) for p in params]
-    for i in range(args.iterations):
-        imsave(os.path.join(args.animation, '%.4d.png' % i), net_img())
-        cost = np.mean(net.update())
-        for param, state in zip(params, learn_rule_states):
-            learn_rule.step(param, state)
-        print('Iteration: %i, cost: %.4f' % (i, cost))
-    imsave(args.output, net_img())
+      rel_x = random.random()
+      rel_y = random.random()
+      x = int(math.floor(rel_x*(style_img.shape[0]-patch_size[0])))
+      y = int(math.floor(rel_y*(style_img.shape[1]-patch_size[1])))
+      style_patch = style_img[x:x+patch_size[0], y:y+patch_size[1], :]
+      
+      x = int(math.floor(rel_x*(subject_img.shape[0]-patch_size[0])))
+      y = int(math.floor(rel_y*(subject_img.shape[1]-patch_size[1])))
+      subject_patch = subject_img[x:x+patch_size[0], y:y+patch_size[1], :]
+      
+      x = int(math.floor(rel_x*(init_img.shape[0]-patch_size[0])))
+      y = int(math.floor(rel_y*(init_img.shape[1]-patch_size[1])))
+      init_patch = init_img[x:x+patch_size[0], y:y+patch_size[1], :]
 
+      style_patch_scaled = nd.zoom(style_patch, (1.0 / scale, 1.0 / scale, 1), order=1) 
+      subject_patch_scaled = nd.zoom(subject_patch, (1.0 / scale, 1.0 / scale, 1), order=1) 
+      init_patch_scaled = nd.zoom(init_patch, (1.0 / scale, 1.0 / scale, 1), order=1) 
+      
+      net = StyleNetwork(layers, 
+                         to_bc01(init_patch_scaled), 
+                         to_bc01(subject_patch_scaled),
+                         to_bc01(style_patch_scaled), 
+                         subject_weights, style_weights,
+                         args.smoothness)
+      params = net._params
+      learn_rule = dp.Adam(learn_rate=args.learn_rate)
+      learn_rule_states = [learn_rule.init_state(p) for p in params]
+      for i in range(args.inner_it):
+          cost = np.mean(net._update())
+          for param, state in zip(params, learn_rule_states):
+              learn_rule.step(param, state)
+          print('Iteration: %i, cost: %.4f' % (i, cost))
+     
+      result_patch_scaled = to_rgb(net.image) - init_patch_scaled 
+      result_patch = nd.zoom(result_patch_scaled, (scale, scale, 1), order=1)
+      
+      border_cut = 10
+      init_img[x+border_cut:x+result_patch.shape[0]-border_cut, 
+               y+border_cut:y+result_patch.shape[1]-border_cut, :] += result_patch[border_cut:-border_cut, border_cut:-border_cut]
+      imsave("%s.jpg"%args.output , init_img + pixel_mean)
 
 if __name__ == "__main__":
     run()
