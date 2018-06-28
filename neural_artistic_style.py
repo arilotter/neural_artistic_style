@@ -134,8 +134,8 @@ def run():
       print "OUTER_IT: ", outer_it, "SCALE:", scale
 
       effective_patch_size = max_patch_size * scale
-      patch_size = (np.min([style_img.shape[0], subject_img.shape[0], init_img.shape[0], effective_patch_size[0]]),
-                    np.min([style_img.shape[1], subject_img.shape[1], init_img.shape[1], effective_patch_size[1]]))
+      patch_size = (int(np.min([style_img.shape[0], subject_img.shape[0], init_img.shape[0], effective_patch_size[0]])),
+                    int(np.min([style_img.shape[1], subject_img.shape[1], init_img.shape[1], effective_patch_size[1]])))
 
       rel_x = random.random()
       rel_y = random.random()
