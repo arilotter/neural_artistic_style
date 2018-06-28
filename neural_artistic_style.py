@@ -165,7 +165,7 @@ def run():
       learn_rule = dp.Adam(learn_rate=args.learn_rate)
       learn_rule_states = [learn_rule.init_state(p) for p in params]
       for i in range(args.inner_it):
-          cost = np.mean(net._update())
+          cost = np.mean(net.update())
           for param, state in zip(params, learn_rule_states):
               learn_rule.step(param, state)
           print('Iteration: %i, cost: %.4f' % (i, cost))
