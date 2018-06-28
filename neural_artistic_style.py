@@ -161,7 +161,7 @@ def run():
                          to_bc01(style_patch_scaled), 
                          subject_weights, style_weights,
                          args.smoothness)
-      params = net._params
+      params = net.params
       learn_rule = dp.Adam(learn_rate=args.learn_rate)
       learn_rule_states = [learn_rule.init_state(p) for p in params]
       for i in range(args.inner_it):
